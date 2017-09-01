@@ -1,211 +1,276 @@
 from __future__ import absolute_import, division, print_function
 import numpy as np
-import pandas as pd
-import scipy.optimize as opt
-from scipy.special import erf
-from .due import due, Doi
+import warnings
+# from .due import due, Doi
 
-__all__ = ["Model", "Fit", "opt_err_func", "transform_data", "cumgauss"]
+__all__ = ["tao_impl_angle_beta"]
 
 
-# Use duecredit (duecredit.org) to provide a citation to relevant work to
-# be cited. This does nothing, unless the user has duecredit installed,
-# And calls this with duecredit (as in `python -m duecredit script.py`):
-due.cite(Doi("10.1167/13.9.30"),
-         description="Template project for small scientific Python projects",
-         tags=["reference-implementation"],
-         path='lightcone')
+import astropy
+import astropy.units as u
 
+def convert_redshift_to_comoving_distance(redshifts,
+                                          cosmo=None,
+                                          distance_units=None):
+    r"""
+    Returns co-moving distances for a list of redshifts
 
-def transform_data(data):
+    Parameters:
+    -----------
+    
+    redshifts: double, array or scalar
+               List of redshifts
+    cosmo    : An astropy cosmology object. default is Planck 2015
+               Sets up the cosmology for calculating the co-moving distances
+    distance_units : astropy units object, units for the co-moving distance(s)
+       
+    Returns:
+    --------
+    com_dist : double, array or scalar. Same length as the input redshifts
+               Returned in `distance_units` (if specified); otherwise, returned
+               in Mpc/h units. 
     """
-    Function that takes experimental data and gives us the
-    dependent/independent variables for analysis.
 
-    Parameters
-    ----------
-    data : Pandas DataFrame or string.
-        If this is a DataFrame, it should have the columns `contrast1` and
-        `answer` from which the dependent and independent variables will be
-        extracted. If this is a string, it should be the full path to a csv
-        file that contains data that can be read into a DataFrame with this
-        specification.
+    default_units = u.Mpc
+    
+    if cosmo is None:
+        from astropy.cosmology import Planck15
+        cosmo = Planck15
+        msg = "cosmology is not set. Using Planck 2015 cosmology = {0}"\
+              .format(cosmo)
+        warnings.warn(msg)
+    else:
+        if not isinstance(cosmo, astropy.cosmology):
+            msg = '{The cosmology object parameter must be an instance of '\
+                  '`astropy.cosmology`}'
+            raise ValueError(msg)
 
-    Returns
-    -------
-    x : array
-        The unique contrast differences.
-    y : array
-        The proportion of '2' answers in each contrast difference
-    n : array
-        The number of trials in each x,y condition
+    if distance_units is not None:
+        if not isinstance(distance_units, u.Unit):
+            msg = 'distance units parameter = {0} must be an instance of '\
+                  '`astropy.units`.'.format(distance_units)
+            raise u.UnitsError(msg)
+    else:
+        distance_units = default_units
+
+
+    # calculate all the distances
+    distances = cosmo.comoving_distance(redshifts)
+    distances.to(default_units)
+
+
+    # calculate 1/h
+    H0 = cosmo.H(0)
+    default_hubble_units = (u.km/u.s)/u.Mpc
+    hundredkm_per_s_per_Mpc = 100.0 * default_hubble_units
+    little_h = cosmo.H(0).to(default_hubble_units)/hundredkm_per_s_per_Mpc
+    print("H0 = {0} little h = {1}".format(H0, little_h))
+
+    # convert to co-moving 1/h units
+    distances = distances * little_h
+    print("distances = {0}".format(distances))
+
+    # Now return in the requested units
+    # (set to Mpc/h by default)
+    return distances.to(distance_units)
+
+
+        
+# # Use duecredit (duecredit.org) to provide a citation to relevant work to
+# # be cited. This does nothing, unless the user has duecredit installed,
+# # And calls this with duecredit (as in `python -m duecredit script.py`):
+# due.cite(Doi("10.1167/13.9.30"),
+#          description="Template project for small scientific Python projects",
+#          tags=["reference-implementation"],
+#          path='lightcone')
+
+def tao_paper_solution_angle_beta(min_ra=10.0, max_ra=20.0,
+                                  min_dec=30.0, max_dec=35.0,
+                                  zmin=0.0, zmax=2.0,
+                                  boxsize=[500.0, 500.0, 500.0]):
+    r"""
+    Returns the angle, :math:`\beta`, to construct an unique lightcone
+
+    The routine here is an attempt at creating the algorithm presented
+    in the TAO code paper (http://adsabs.harvard.edu/abs/2016ApJS..223....9B)
+
+    Parameters:
+    -----------
+
+    min_ra  : double, defaut=10.0 degrees. Must be in range [0.0, 360.0]
+              Minimum value of Right Ascension for the lightcone
+
+    max_ra  : double, default=20.0 degrees. Must be in range [0.0, 360.0]
+              Maximum value of Right Ascension for the lightcone
+
+    min_dec : double, default=30.0 degrees, Must be in range [-90.0, 90.0]
+              Minimum value of Declination for the lightcone
+
+    min_dec : double, default=30.0 degrees, Must be in range [-90.0, 90.0]
+              Maximum value of Declination for the lightcone
+
+    zmin    : double, default=0.0. 
+              Minimum redshift cut for the lightcone
+
+    zmax    : double, default=2.0
+              Maximum redshift cut for the lightcone
+
+    boxsize : double, or array of 3 doubles, units=Mpc/h. default = 500 Mpc/h. 
+              The periodic boxsize in each of the 3 dimensions.
+    
+    Returns:
+    --------
+
+    beta : double, units=degrees
+           The angle by which the lightcone needs to start off such that an
+           unique lightcone solution can be generated. 
+            
+           
+    
+    .. note : The solution here might be different from the one presented in 
+              the TAO paper (http://adsabs.harvard.edu/abs/2016ApJS..223....9B)
+    
+    
+    
     """
-    if isinstance(data, str):
-        data = pd.read_csv(data)
-
-    contrast1 = data['contrast1']
-    answers = data['answer']
-
-    x = np.unique(contrast1)
-    y = []
-    n = []
-
-    for c in x:
-        idx = np.where(contrast1 == c)
-        n.append(float(len(idx[0])))
-        answer1 = len(np.where(answers[idx[0]] == 1)[0])
-        y.append(answer1 / n[-1])
-    return x, y, n
+    
 
 
-def cumgauss(x, mu, sigma):
+
+def tao_impl_angle_beta(min_ra=10.0, max_ra=20.0,
+                        min_dec=30.0, max_dec=35.0,
+                        zmin=0.0, zmax=2.0,
+                        cosmo=None,
+                        boxsize=500.0 * u.Mpc):
+                        
+    r"""
+    Returns the angle, :math:`\beta`, to construct an unique lightcone
+
+    The routine here is a direct translation from C++ in the TAO code-base
+    to python.
+
+    Parameters:
+    -----------
+
+    min_ra  : double, defaut=10.0 degrees. Must be in range [0.0, 360.0]
+              Minimum value of Right Ascension for the lightcone
+
+    max_ra  : double, default=20.0 degrees. Must be in range [0.0, 360.0]
+              Maximum value of Right Ascension for the lightcone
+
+    min_dec : double, default=30.0 degrees, Must be in range [-90.0, 90.0]
+              Minimum value of Declination for the lightcone
+
+    min_dec : double, default=30.0 degrees, Must be in range [-90.0, 90.0]
+              Maximum value of Declination for the lightcone
+
+    zmin    : double, default=0.0. 
+              Minimum redshift cut for the lightcone
+
+    zmax    : double, default=2.0
+              Maximum redshift cut for the lightcone
+
+    cosmo   : astropy cosmology object. default None
+
+    boxsize : double, or array of 3 doubles, units=Mpc/h. default = 500 Mpc/h. 
+              The periodic boxsize in each of the 3 dimensions.
+    
+    Returns:
+    --------
+
+    beta : double, units=degrees
+           The angle by which the lightcone needs to start off such that an
+           unique lightcone solution can be generated. 
+            
+           
+    
+    .. note : The solution here might be different from the one presented in 
+              the TAO paper (http://adsabs.harvard.edu/abs/2016ApJS..223....9B)
+    
+    
     """
-    The cumulative Gaussian at x, for the distribution with mean mu and
-    standard deviation sigma.
+    max_redshift_allowed = 100.0
+    
+    # Input validation
+    if min_ra < 0.0 or max_ra > 360:
+        msg = 'Right Ascension (RA) must be between [0.0, 360.0]. The input '\
+              'RA min, max values are = {0}, {1}'.format(min_ra, max_ra)
+        raise ValueError(msg)
 
-    Parameters
-    ----------
-    x : float or array
-       The values of x over which to evaluate the cumulative Gaussian function
+    if min_dec < -90.0 or max_dec > 90.0:
+        msg = 'Declination (DEC) must be between [-90.0, 90.0]. The input '\
+              'DEC min, max values are = {0}, {1}'.format(min_dec, max_dec)
+        raise ValueError(msg)
 
-    mu : float
-       The mean parameter. Determines the x value at which the y value is 0.5
+    # Now attach degrees units
+    print("Before switching to radians: min ra = {0}".format(min_ra))
+    min_ra = (min_ra * u.deg).to(u.rad)
+    max_ra = (max_ra * u.deg).to(u.rad)
+    min_dec = (min_dec * u.deg).to(u.rad)
+    max_dec = (max_dec * u.deg).to(u.rad)
+    print("After switching to radians: min ra = {0}".format(min_ra))
 
-    sigma : float
-       The variance parameter. Determines the slope of the curve at the point
-       of Deflection
+    if zmin < 0.0 or zmax > max_redshift_allowed:
+        msg = 'Redshift (z) must be between [0.0, {0}]. The input '\
+              'z min, max values are = {1}, {2}'.format(max_redshift_allowed,
+                                                        zmin,
+                                                        zmax)
+        raise ValueError(msg)
 
-    Returns
-    -------
+    units = None
+    if isinstance(boxsize, u.Quantity):
+        units = boxsize.unit
+    
+    d1, d0 = convert_redshift_to_comoving_distance([zmax, zmin],
+                                                   cosmo=cosmo,
+                                                   distance_units=units)
+    # If boxsize did not have units, convert to
+    # the units of the co-moving distance
+    if units is None:
+        boxsize = boxsize * d1.unit
 
-    g : float or array
-        The cumulative gaussian with mean $\\mu$ and variance $\\sigma$
-        evaluated at all points in `x`.
+    ra_diff = max_ra - min_ra
+    if (d1 - d0 * np.cos(ra_diff)) <= boxsize:
+        # all angles are in radians -> convert to degrees
+        return 0.0 - min_ra.to(deg)
+    
+    # Use Ridder's method to find the optimal angle for unique cones
+    # auto res = hpc::ridders(
+    #     [ra, d0, d1, b]( double x )
+    #     {  
+    #         double phi = ra + x;
+    #         return b - d1*(cos( x ) - sin( x )/tan( phi ));
+    # },
+    #     0.5*M_PI,
+    #     0.0
+    # );
+    # if( res != std::numeric_limits<double>::max() )
+    # return res - lc.min_ra();
+    # else
+    # return boost::none;
+    def _func(x, ra_diff, d0, d1, boxsize):
+        x_in_rad = x * u.rad
+        for name, a in zip(['x', 'ra diff', 'd0', 'd1', 'boxsize'],
+                           [x_in_rad, ra_diff, d0, d1, boxsize]):
+            print("{0} = {1}".format(name, a))
+            
+        phi = ra_diff + x_in_rad
+        res =  boxsize - d1 * (np.cos(x) - np.sin(x)/np.tan(phi))
+        print("res = {0}".format(res))
+        return res
+        
+    method = 'ridder'
+    if method == 'ridder':
+        from scipy.optimize import ridder as solver
+    else:
+        from scipy.optimize import brentq as solver
 
-    Notes
-    -----
-    Based on:
-    http://en.wikipedia.org/wiki/Normal_distribution#Cumulative_distribution_function
-
-    The cumulative Gaussian function is defined as:
-
-    .. math::
-
-        \\Phi(x) = \\frac{1}{2} [1 + erf(\\frac{x}{\\sqrt{2}})]
-
-    Where, $erf$, the error function is defined as:
-
-    .. math::
-
-        erf(x) = \\frac{1}{\\sqrt{\\pi}} \int_{-x}^{x} e^{t^2} dt
-
-    """
-    return 0.5 * (1 + erf((x - mu) / (np.sqrt(2) * sigma)))
-
-
-def opt_err_func(params, x, y, func):
-    """
-    Error function for fitting a function using non-linear optimization.
-
-    Parameters
-    ----------
-    params : tuple
-        A tuple with the parameters of `func` according to their order of
-        input
-
-    x : float array
-        An independent variable.
-
-    y : float array
-        The dependent variable.
-
-    func : function
-        A function with inputs: `(x, *params)`
-
-    Returns
-    -------
-    float array
-        The marginals of the fit to x/y given the params
-    """
-    return y - func(x, *params)
-
-
-class Model(object):
-    """Class for fitting cumulative Gaussian functions to data"""
-    def __init__(self, func=cumgauss):
-        """ Initialize a model object.
-
-        Parameters
-        ----------
-        data : Pandas DataFrame
-            Data from a subjective contrast judgement experiment
-
-        func : callable, optional
-            A function that relates x and y through a set of parameters.
-            Default: :func:`cumgauss`
-        """
-        self.func = func
-
-    def fit(self, x, y, initial=[0.5, 1]):
-        """
-        Fit a Model to data.
-
-        Parameters
-        ----------
-        x : float or array
-           The independent variable: contrast values presented in the
-           experiment
-        y : float or array
-           The dependent variable
-
-        Returns
-        -------
-        fit : :class:`Fit` instance
-            A :class:`Fit` object that contains the parameters of the model.
-
-        """
-        params, _ = opt.leastsq(opt_err_func, initial,
-                                args=(x, y, self.func))
-        return Fit(self, params)
-
-
-class Fit(object):
-    """
-    Class for representing a fit of a model to data
-    """
-    def __init__(self, model, params):
-        """
-        Initialize a :class:`Fit` object.
-
-        Parameters
-        ----------
-        model : a :class:`Model` instance
-            An object representing the model used
-
-        params : array or list
-            The parameters of the model evaluated for the data
-
-        """
-        self.model = model
-        self.params = params
-
-    def predict(self, x):
-        """
-        Predict values of the dependent variable based on values of the
-        indpendent variable.
-
-        Parameters
-        ----------
-        x : float or array
-            Values of the independent variable. Can be values presented in
-            the experiment. For out-of-sample prediction (e.g. in
-            cross-validation), these can be values
-            that were not presented in the experiment.
-
-        Returns
-        -------
-        y : float or array
-            Predicted values of the dependent variable, corresponding to
-            values of the independent variable.
-        """
-        return self.model.func(x, *self.params)
+    beta, root_obj = solver(_func, 0.0, 0.5*np.pi,
+                            maxiter=100,
+                            full_output=True,
+                            disp=True,
+                            args=(ra_diff, d0, d1, boxsize))
+                  
+    print("Root object = {0}".format(root_obj))
+    print("Solved angle = {0}. Converged = {1}"
+          .format(beta, root_obj.Converged))

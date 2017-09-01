@@ -132,7 +132,7 @@ NAME = "lightcone"
 PACKAGES = [NAME]
 PACKAGE_DATA = {NAME: [os.path.join('data', '*')]}
 INSTALL_REQUIRES = ["setuptools"]
-RUN_REQUIRES = ["numpy"]
+RUN_REQUIRES = ["numpy", "astropy", "scipy"]
 
 def setup_package():
     src_path = os.path.dirname(os.path.abspath(sys.argv[0]))
