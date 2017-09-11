@@ -92,13 +92,14 @@ def write_version_py(filename='lightcone/version.py'):
 # THIS FILE IS AUTO-GENERATED FROM LIGHTCONE SETUP.PY
 #
 short_version = '%(version)s'
-version = '%(version)s'
+__version__ = '%(version)s'
 full_version = '%(full_version)s'
 git_revision = '%(git_revision)s'
 release = %(isrelease)s
 
 if not release:
-    version = full_version
+    __version__ = full_version
+
 """
     FULLVERSION, GIT_REVISION = get_version_info()
     
@@ -157,6 +158,7 @@ def setup_package():
                     platforms="OS Independent",
                     version=VERSION,
                     packages=PACKAGES,
+                    zip_safe=False,
                     package_data=PACKAGE_DATA,
                     install_requires=INSTALL_REQUIRES,
                     requires=RUN_REQUIRES)
