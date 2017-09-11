@@ -1,0 +1,7 @@
+[run]
+branch = True
+source = lightcone/*
+include = lightcone/*
+omit = */setup.py
+[report]
+include = lightcone/*

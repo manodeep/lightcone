@@ -1,0 +1,11 @@
+include MANIFEST.in
+recursive-include lightcone/ *.py
+
+include doc/Makefile 
+recursive-include doc/release *
+recursive-include doc/source *
+recursive-include doc/sphinxext *
+recursive-include tools/swig *
+recursive-include doc/scipy-sphinx-theme *
+
+global-exclude *.pyc *.pyo *.pyd
